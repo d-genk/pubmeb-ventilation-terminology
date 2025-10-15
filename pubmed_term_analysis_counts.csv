@@ -1,0 +1,4 @@
+Search Term,Component Phrases,Result Count
+"""pediatric tracheostomy""",pediatric tracheostomy,299
+"""mechanical ventilation""",mechanical ventilation,1000
+"""pediatric tracheostomy"" AND ""mechanical ventilation""",pediatric tracheostomy; mechanical ventilation,32
