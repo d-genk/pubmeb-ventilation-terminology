@@ -67,7 +67,7 @@ EMAIL = "your_email@example.com"            # Required by NCBI — enter a valid
 USE_API_KEY = False                         # Set to True if you have a PubMed API key
 API_KEY = "your_api_key_here"               # Optional: increases request rate limit
 
-MAX_COMBO_SIZE = 2                          # Max number of phrases to combine (1 to N)
+MAX_COMBO_SIZE = 10                          # Max number of phrases to combine (1 to N)
 OPERATOR = "AND"                            # Use "AND" for strict match, "OR" for broad
 SLEEP_BETWEEN_CALLS = 0.34                  # Seconds to wait between API calls
 OUTPUT_PREFIX = "pubmed_term_analysis"      # Base name for output files
@@ -91,11 +91,16 @@ def generate_phrase_combinations(phrases, max_combination_size=2, operator="AND"
     return all_combos
 
 
-def fetch_pmids(search_term):
+def fetch_pmids(search_term, filter_age=True):
     """
     Query PubMed via the esearch endpoint and return a set of PMIDs.
     """
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+
+    if filter_age:
+        age_filter = '("infant"[MeSH Terms] OR "child, preschool"[MeSH Terms] OR "child"[MeSH Terms] OR "adolescent"[MeSH Terms])'
+        search_term = f"{search_term} AND {age_filter}"
+    
     params = {
         "db": "pubmed",
         "term": search_term,
