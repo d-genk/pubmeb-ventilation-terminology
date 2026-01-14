@@ -1,4 +1,1 @@
 Term 1,Term 2,Shared Count,Union Count,Jaccard %
-"""pediatric tracheostomy""","""mechanical ventilation""",1,1298,0.1
-"""pediatric tracheostomy""","""pediatric tracheostomy"" AND ""mechanical ventilation""",32,299,10.7
-"""mechanical ventilation""","""pediatric tracheostomy"" AND ""mechanical ventilation""",1,1031,0.1
