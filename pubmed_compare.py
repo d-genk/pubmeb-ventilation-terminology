@@ -1,27 +1,27 @@
 """
-PubMed Phrase Comparison Script (Expanded)
-------------------------------------------
+PubMed Phrase Comparison Script (Expanded with Custom Mode)
+---------------------------------------------------------
 
 This script helps researchers evaluate the effectiveness and uniqueness of PubMed search phrases.
-It:
-  1. Accepts a list of predefined medical search phrases.
-  2. Constructs combinations of those phrases using Boolean logic ("AND" or "OR").
-  3. Searches PubMed using the E-utilities API to retrieve PMIDs for each phrase.
-  4. Compares overlap across search results for all combinations.
-  5. Saves:
-      - a CSV file listing how many articles were found for each phrase or combo
-      - a CSV file showing pairwise overlaps (shared count and Jaccard index)
-      - a CSV file containing the COMPLETE list of PMIDs for every search string
 
-Usage Instructions:
-- You must have Python 3 installed.
-- Install the required Python library by running:
-    pip install requests
-- Customize the PHRASES list or OPERATOR (AND/OR) as needed.
-- Add your email address (required by NCBI) and optionally an API key.
-- Run the script:
-    python pubmed_term_overlap.py
+It operates in two modes:
+  A. PHRASE COMBINATION MODE:
+     - Accepts a list of phrases.
+     - Generates all combinations (AND/OR).
+     - Compares overlap across them.
+  
+  B. CUSTOM SEARCH MODE:
+     - Accepts a single, specific complex search string.
+     - Retrieves PMIDs for that specific string only.
 
+Output Files:
+  1. *_counts.csv:     Result counts for the search.
+  2. *_overlap.csv:    Pairwise overlap (only useful if running multiple phrase combos).
+  3. *_pmid_lists.csv: The complete list of PMIDs for every search run.
+
+Usage:
+  - Configure the settings below (USER CONFIGURATION).
+  - Run: python pubmed_term_overlap.py
 """
 
 import requests
@@ -29,24 +29,40 @@ import time
 import csv
 from itertools import combinations
 
-# -------------- USER CONFIGURATION ------------------
+# ================= USER CONFIGURATION =================
 
-# Replace with your own list of phrases
+# --- MODE SELECTION ---
+# Set to True to ignore the PHRASES list and use the CUSTOM_SEARCH_STRING instead.
+USE_CUSTOM_SEARCH = False
+
+# If USE_CUSTOM_SEARCH is True, put your exact query here:
+CUSTOM_SEARCH_STRING = '("long covid"[Title/Abstract] OR "post-acute sequelae"[Title]) AND "vaccine"[Title/Abstract]'
+
+# If USE_CUSTOM_SEARCH is False, the script will combine these phrases:
 PHRASES = [
-  "chronic ventilation via tracheostomy" 
+  "home",
+  "ventilation",
+  "oxygen therapy"
 ]
 
-TOOL_NAME = "term_overlap_analyzer"         # Name of your tool (for NCBI tracking)
-EMAIL = "your_email@example.com"            # Required by NCBI — enter a valid email
-USE_API_KEY = False                         # Set to True if you have a PubMed API key
-API_KEY = "your_api_key_here"               # Optional: increases request rate limit
+# --- SEARCH SETTINGS ---
+# Set to True to automatically append a filter for children/adolescents (infant-18yrs)
+# NOTE: Set this to False if your Custom String already handles demographics.
+APPLY_AGE_FILTER = True
 
-MAX_COMBO_SIZE = 10                          # Max number of phrases to combine (1 to N)
-OPERATOR = "AND"                            # Use "AND" for strict match, "OR" for broad
-SLEEP_BETWEEN_CALLS = 0.34                  # Seconds to wait between API calls
-OUTPUT_PREFIX = "pubmed_term_analysis"      # Base name for output files
+MAX_COMBO_SIZE = 10              # Max number of phrases to combine (only for Phrase Mode)
+OPERATOR = "AND"                # "AND" for strict match, "OR" for broad (only for Phrase Mode)
 
-# ----------------------------------------------------
+# --- API & OUTPUT SETTINGS ---
+TOOL_NAME = "term_overlap_analyzer"
+EMAIL = "your_email@example.com"       # Required by NCBI
+USE_API_KEY = False                    # Set True if you have a key
+API_KEY = "your_api_key_here"
+
+SLEEP_BETWEEN_CALLS = 0.34             # Throttle to avoid NCBI 429 errors
+OUTPUT_PREFIX = "pubmed_term_analysis"
+
+# ======================================================
 
 
 def generate_phrase_combinations(phrases, max_combination_size=2, operator="AND"):
@@ -64,20 +80,20 @@ def generate_phrase_combinations(phrases, max_combination_size=2, operator="AND"
     return all_combos
 
 
-def fetch_pmids(search_term, filter_age=True):
+def fetch_pmids(search_term, apply_age_filter=True):
     """
     Query PubMed via the esearch endpoint and return a set of PMIDs.
     """
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 
-    if filter_age:
+    if apply_age_filter:
         age_filter = '("infant"[MeSH Terms] OR "child, preschool"[MeSH Terms] OR "child"[MeSH Terms] OR "adolescent"[MeSH Terms])'
-        search_term = f"{search_term} AND {age_filter}"
+        search_term = f"({search_term}) AND {age_filter}"
     
     params = {
         "db": "pubmed",
         "term": search_term,
-        "retmax": 25000,  # Max results per query; raise with caution
+        "retmax": 100000,  # Retreive up to 100k PMIDs
         "retmode": "json",
         "tool": TOOL_NAME,
         "email": EMAIL
@@ -89,31 +105,33 @@ def fetch_pmids(search_term, filter_age=True):
         response = requests.get(base_url, params=params)
         response.raise_for_status()
         data = response.json()
+        
+        # Parse result
         if "esearchresult" in data and "idlist" in data["esearchresult"]:
             return set(data["esearchresult"]["idlist"])
         else:
             return set()
+            
     except Exception as e:
         print(f"Error fetching for term: {search_term}\n{e}")
         return set()
 
 
 def save_term_counts(results_dict, filename):
-    """
-    Save a CSV with search terms and their result counts.
-    """
     with open(filename, "w", newline='', encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Search Term", "Component Phrases", "Result Count"])
         for term, data in results_dict.items():
-            writer.writerow([term, "; ".join(data["components"]), len(data["pmids"])])
+            components_str = "; ".join(data["components"])
+            writer.writerow([term, components_str, len(data["pmids"])])
 
 
 def save_overlap_matrix(results_dict, filename):
-    """
-    Save a CSV matrix of pairwise overlaps between all term results.
-    """
     terms = list(results_dict.keys())
+    # If only 1 term exists (Custom Mode), we can't do overlaps
+    if len(terms) < 2:
+        return 
+
     with open(filename, "w", newline='', encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Term 1", "Term 2", "Shared Count", "Union Count", "Jaccard %"])
@@ -126,20 +144,11 @@ def save_overlap_matrix(results_dict, filename):
 
 
 def save_pmid_lists(results_dict, filename):
-    """
-    Save a CSV where each row is a search term followed by all its PMIDs in subsequent columns.
-    Format: [Term, Count, PMID1, PMID2, PMID3...]
-    """
     with open(filename, "w", newline='', encoding="utf-8") as f:
         writer = csv.writer(f)
-        # We don't write a specific header for PMIDs because the length varies
         writer.writerow(["Search Term", "Count", "PMIDs (Sequential ->)"])
-        
         for term, data in results_dict.items():
-            # Sort PMIDs to ensure consistent order in the file
             pmid_list = sorted(list(data["pmids"]))
-            
-            # Construct the row: Term | Count | pmid | pmid | pmid ...
             row = [term, len(pmid_list)] + pmid_list
             writer.writerow(row)
 
@@ -147,27 +156,38 @@ def save_pmid_lists(results_dict, filename):
 # -------------- MAIN SCRIPT ------------------
 
 if __name__ == "__main__":
-    print("🔍 Generating search phrase combinations...")
-    all_combos = generate_phrase_combinations(PHRASES, max_combination_size=MAX_COMBO_SIZE, operator=OPERATOR)
     
+    # 1. Determine Search Strategy
+    if USE_CUSTOM_SEARCH:
+        print(f"🔧 Custom Search Mode ENABLED.")
+        print(f"   Query: {CUSTOM_SEARCH_STRING}")
+        # Create a single entry list for the loop
+        all_combos = [(CUSTOM_SEARCH_STRING, ["Custom Query"])]
+    else:
+        print("🔍 Generating phrase combinations...")
+        all_combos = generate_phrase_combinations(PHRASES, max_combination_size=MAX_COMBO_SIZE, operator=OPERATOR)
+
+    # 2. Run Searches
     results = {}
-    print(f"🔎 Running {len(all_combos)} PubMed searches...")
+    print(f"🔎 Running {len(all_combos)} search(es) (Age Filter: {APPLY_AGE_FILTER})...")
+    
     for search_term, components in all_combos:
-        pmids = fetch_pmids(search_term)
+        pmids = fetch_pmids(search_term, apply_age_filter=APPLY_AGE_FILTER)
         results[search_term] = {"components": components, "pmids": pmids}
-        print(f"✓ {search_term} → {len(pmids)} results")
+        print(f"✓ Found {len(pmids)} PMIDs")
         time.sleep(SLEEP_BETWEEN_CALLS)
 
+    # 3. Save Outputs
     print("💾 Saving term counts...")
     save_term_counts(results, f"{OUTPUT_PREFIX}_counts.csv")
 
-    print("💾 Saving overlap matrix...")
-    save_overlap_matrix(results, f"{OUTPUT_PREFIX}_overlap.csv")
+    if len(results) > 1:
+        print("💾 Saving overlap matrix...")
+        save_overlap_matrix(results, f"{OUTPUT_PREFIX}_overlap.csv")
+    else:
+        print("ℹ️ Skipping overlap matrix (only 1 search term used).")
 
     print("💾 Saving full PMID records...")
     save_pmid_lists(results, f"{OUTPUT_PREFIX}_pmid_lists.csv")
 
-    print("\n✅ Done! You can now explore:")
-    print(f"  • {OUTPUT_PREFIX}_counts.csv — Number of results per phrase")
-    print(f"  • {OUTPUT_PREFIX}_overlap.csv — Overlap between search results (pairwise)")
-    print(f"  • {OUTPUT_PREFIX}_pmid_lists.csv — Complete lists of PMIDs for every search")
+    print("\n✅ Done!")

@@ -1,1 +1,22 @@
 Term 1,Term 2,Shared Count,Union Count,Jaccard %
+"""home""","""ventilation""",0,0,0.0
+"""home""","""oxygen therapy""",0,0,0.0
+"""home""","""home"" AND ""ventilation""",0,0,0.0
+"""home""","""home"" AND ""oxygen therapy""",0,0,0.0
+"""home""","""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""home""","""home"" AND ""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""ventilation""","""oxygen therapy""",0,0,0.0
+"""ventilation""","""home"" AND ""ventilation""",0,0,0.0
+"""ventilation""","""home"" AND ""oxygen therapy""",0,0,0.0
+"""ventilation""","""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""ventilation""","""home"" AND ""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""oxygen therapy""","""home"" AND ""ventilation""",0,0,0.0
+"""oxygen therapy""","""home"" AND ""oxygen therapy""",0,0,0.0
+"""oxygen therapy""","""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""oxygen therapy""","""home"" AND ""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""home"" AND ""ventilation""","""home"" AND ""oxygen therapy""",0,0,0.0
+"""home"" AND ""ventilation""","""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""home"" AND ""ventilation""","""home"" AND ""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""home"" AND ""oxygen therapy""","""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""home"" AND ""oxygen therapy""","""home"" AND ""ventilation"" AND ""oxygen therapy""",0,0,0.0
+"""ventilation"" AND ""oxygen therapy""","""home"" AND ""ventilation"" AND ""oxygen therapy""",0,0,0.0

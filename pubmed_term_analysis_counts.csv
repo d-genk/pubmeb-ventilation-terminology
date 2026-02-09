@@ -1,2 +1,8 @@
 Search Term,Component Phrases,Result Count
-"""chronic ventilation via tracheostomy""",chronic ventilation via tracheostomy,57
+"""home""",home,0
+"""ventilation""",ventilation,0
+"""oxygen therapy""",oxygen therapy,0
+"""home"" AND ""ventilation""",home; ventilation,0
+"""home"" AND ""oxygen therapy""",home; oxygen therapy,0
+"""ventilation"" AND ""oxygen therapy""",ventilation; oxygen therapy,0
+"""home"" AND ""ventilation"" AND ""oxygen therapy""",home; ventilation; oxygen therapy,0
