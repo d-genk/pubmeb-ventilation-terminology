@@ -1,23 +1,18 @@
 """
-PubMed Phrase Comparison Script (Expanded with Custom Mode)
----------------------------------------------------------
+PubMed Phrase Comparison Script (Verbose UID-Slicing Edition)
+-------------------------------------------------------------
 
 This script helps researchers evaluate the effectiveness and uniqueness of PubMed search phrases.
 
-It operates in two modes:
-  A. PHRASE COMBINATION MODE:
-     - Accepts a list of phrases.
-     - Generates all combinations (AND/OR).
-     - Compares overlap across them.
-  
-  B. CUSTOM SEARCH MODE:
-     - Accepts a single, specific complex search string.
-     - Retrieves PMIDs for that specific string only.
+**Crucial Update:** NCBI limits standard API pagination to 10,000 results for PubMed. 
+To bypass this limitation robustly, this script "slices" the search across 
+ranges of PMIDs (UIDs), fetching results in chronological chunks to retrieve 
+datasets of any size (e.g., 28k+).
 
 Output Files:
-  1. *_counts.csv:     Result counts for the search.
-  2. *_overlap.csv:    Pairwise overlap (only useful if running multiple phrase combos).
-  3. *_pmid_lists.csv: The complete list of PMIDs for every search run.
+  1. *_counts.csv:     Result counts and Term Mapping.
+  2. *_pmid_lists.csv: The complete list of PMIDs.
+  3. *_overlap.csv:    (Optional) Overlap matrix.
 
 Usage:
   - Configure the settings below (USER CONFIGURATION).
@@ -32,13 +27,12 @@ from itertools import combinations
 # ================= USER CONFIGURATION =================
 
 # --- MODE SELECTION ---
-# Set to True to ignore the PHRASES list and use the CUSTOM_SEARCH_STRING instead.
-USE_CUSTOM_SEARCH = False
+USE_CUSTOM_SEARCH = True
 
-# If USE_CUSTOM_SEARCH is True, put your exact query here:
-CUSTOM_SEARCH_STRING = '("long covid"[Title/Abstract] OR "post-acute sequelae"[Title]) AND "vaccine"[Title/Abstract]'
+# Your exact query:
+CUSTOM_SEARCH_STRING = 'Chronic invasive mechanical ventilation OR Chronic invasive ventilation OR Chronic mechanical ventilation OR Chronic ventilation via tracheostomy OR Chronic ventilator dependence OR Home invasive ventilation OR Home mechanical ventilation OR Home ventilation OR Long-term mechanical ventilation'
 
-# If USE_CUSTOM_SEARCH is False, the script will combine these phrases:
+# Phrase list (used only if USE_CUSTOM_SEARCH = False)
 PHRASES = [
   "home",
   "ventilation",
@@ -46,12 +40,12 @@ PHRASES = [
 ]
 
 # --- SEARCH SETTINGS ---
-# Set to True to automatically append a filter for children/adolescents (infant-18yrs)
-# NOTE: Set this to False if your Custom String already handles demographics.
-APPLY_AGE_FILTER = True
+# Set to True to automatically append a filter for children/adolescents.
+# Set to False to match raw PubMed GUI searches exactly.
+APPLY_AGE_FILTER = False
 
-MAX_COMBO_SIZE = 10              # Max number of phrases to combine (only for Phrase Mode)
-OPERATOR = "AND"                # "AND" for strict match, "OR" for broad (only for Phrase Mode)
+MAX_COMBO_SIZE = 10
+OPERATOR = "AND"
 
 # --- API & OUTPUT SETTINGS ---
 TOOL_NAME = "term_overlap_analyzer"
@@ -59,19 +53,17 @@ EMAIL = "your_email@example.com"       # Required by NCBI
 USE_API_KEY = False                    # Set True if you have a key
 API_KEY = "your_api_key_here"
 
-SLEEP_BETWEEN_CALLS = 0.34             # Throttle to avoid NCBI 429 errors
+# We slice the UID space. 2 million PMIDs usually yields < 10,000 results per chunk.
+# PubMed IDs currently go up to roughly 40 million.
+UID_SLICE_SIZE = 2000000
+MAX_PMID = 45000000                    
+SLEEP_BETWEEN_CALLS = 0.35             # Throttle to avoid NCBI 429 errors
 OUTPUT_PREFIX = "pubmed_term_analysis"
 
 # ======================================================
 
-
 def generate_phrase_combinations(phrases, max_combination_size=2, operator="AND"):
-    """
-    Build Boolean combinations of phrases using AND or OR.
-    Returns a list of tuples: (combined_search_string, [component_phrases])
-    """
     operator = operator.upper()
-    assert operator in {"AND", "OR"}, "Operator must be 'AND' or 'OR'."
     all_combos = []
     for r in range(1, max_combination_size + 1):
         for combo in combinations(phrases, r):
@@ -80,9 +72,34 @@ def generate_phrase_combinations(phrases, max_combination_size=2, operator="AND"
     return all_combos
 
 
-def fetch_pmids(search_term, apply_age_filter=True):
+def fetch_total_count_and_translation(base_url, base_params, search_term):
     """
-    Query PubMed via the esearch endpoint and return a set of PMIDs.
+    Does a single lightweight query to get the overall count and the GUI mapping.
+    """
+    params = base_params.copy()
+    params["retmax"] = 0
+    params["term"] = search_term
+    
+    try:
+        response = requests.get(base_url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if "esearchresult" not in data:
+            return 0, ""
+            
+        total_count = int(data["esearchresult"].get("count", 0))
+        translation = data["esearchresult"].get("querytranslation", "")
+        return total_count, translation
+        
+    except Exception as e:
+        print(f"   [!] Error getting baseline stats: {e}")
+        return 0, ""
+
+
+def fetch_pmids_by_slicing(search_term, apply_age_filter=True):
+    """
+    Query PubMed by slicing the query by PMID range to avoid the 10k limit.
     """
     base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 
@@ -90,45 +107,96 @@ def fetch_pmids(search_term, apply_age_filter=True):
         age_filter = '("infant"[MeSH Terms] OR "child, preschool"[MeSH Terms] OR "child"[MeSH Terms] OR "adolescent"[MeSH Terms])'
         search_term = f"({search_term}) AND {age_filter}"
     
-    params = {
+    base_params = {
         "db": "pubmed",
-        "term": search_term,
-        "retmax": 100000,  # Retreive up to 100k PMIDs
         "retmode": "json",
         "tool": TOOL_NAME,
         "email": EMAIL
     }
     if USE_API_KEY:
-        params["api_key"] = API_KEY
+        base_params["api_key"] = API_KEY
 
-    try:
-        response = requests.get(base_url, params=params)
-        response.raise_for_status()
-        data = response.json()
+    print(f"   ...Contacting NCBI to initialize: {search_term[:50]}...")
+
+    # 1. Get the official total count and mapping translation
+    total_count, translation = fetch_total_count_and_translation(base_url, base_params, search_term)
+    print(f"   ...Target: {total_count} total records.")
+    
+    if total_count == 0:
+        return set(), translation, 0
+
+    all_pmids = set()
+    
+    # 2. Iterate through UID space
+    start_uid = 1
+    slice_num = 1
+    
+    while start_uid <= MAX_PMID:
+        end_uid = start_uid + UID_SLICE_SIZE - 1
         
-        # Parse result
-        if "esearchresult" in data and "idlist" in data["esearchresult"]:
-            return set(data["esearchresult"]["idlist"])
-        else:
-            return set()
+        # Create a modified query constrained by a specific UID range
+        sliced_query = f"({search_term}) AND {start_uid}:{end_uid}[UID]"
+        
+        slice_params = base_params.copy()
+        slice_params["term"] = sliced_query
+        slice_params["retmax"] = 9999  # Safe limit under 10k
+        slice_params["retstart"] = 0   # Always 0, since we rely on UID filtering
+        
+        # Verbose progress indicator
+        print(f"   [Slice {slice_num}] Scanning PMIDs {start_uid}-{end_uid}...", end=" ", flush=True)
+        
+        try:
+            time.sleep(SLEEP_BETWEEN_CALLS)
+            response = requests.get(base_url, params=slice_params)
+            response.raise_for_status()
+            data = response.json()
             
-    except Exception as e:
-        print(f"Error fetching for term: {search_term}\n{e}")
-        return set()
+            if "esearchresult" in data:
+                slice_count = int(data["esearchresult"].get("count", 0))
+                
+                # Check if we got IDs
+                new_ids = []
+                if "idlist" in data["esearchresult"] and data["esearchresult"]["idlist"]:
+                    new_ids = data["esearchresult"]["idlist"]
+                    all_pmids.update(new_ids)
+                
+                print(f"Found {len(new_ids)} hits. (Total so far: {len(all_pmids)})")
+
+                # Safety check: If a single slice has >9999 results, our slice size is too big.
+                if slice_count > 9999:
+                    print(f"      [!] WARNING: Slice limit exceeded ({slice_count} > 9999). Some results in this range were truncated.")
+                    
+        except Exception as e:
+            print(f"\n      [!] Error fetching slice {start_uid}-{end_uid}: {e}")
+            
+        start_uid += UID_SLICE_SIZE
+        slice_num += 1
+        
+        # Optimization: Stop early if we have found all expected results
+        if len(all_pmids) >= total_count:
+            print(f"   ✓ Reached total count ({len(all_pmids)}/{total_count}). Stopping early.")
+            break
+
+    return all_pmids, translation, total_count
 
 
 def save_term_counts(results_dict, filename):
     with open(filename, "w", newline='', encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Search Term", "Component Phrases", "Result Count"])
+        writer.writerow(["Search Term", "Component Phrases", "Result Count", "Fetched Count", "Search Details"])
         for term, data in results_dict.items():
             components_str = "; ".join(data["components"])
-            writer.writerow([term, components_str, len(data["pmids"])])
+            writer.writerow([
+                term, 
+                components_str, 
+                data["total_count"], 
+                len(data["pmids"]), 
+                data.get("translation", "")
+            ])
 
 
 def save_overlap_matrix(results_dict, filename):
     terms = list(results_dict.keys())
-    # If only 1 term exists (Custom Mode), we can't do overlaps
     if len(terms) < 2:
         return 
 
@@ -161,7 +229,6 @@ if __name__ == "__main__":
     if USE_CUSTOM_SEARCH:
         print(f"🔧 Custom Search Mode ENABLED.")
         print(f"   Query: {CUSTOM_SEARCH_STRING}")
-        # Create a single entry list for the loop
         all_combos = [(CUSTOM_SEARCH_STRING, ["Custom Query"])]
     else:
         print("🔍 Generating phrase combinations...")
@@ -172,13 +239,21 @@ if __name__ == "__main__":
     print(f"🔎 Running {len(all_combos)} search(es) (Age Filter: {APPLY_AGE_FILTER})...")
     
     for search_term, components in all_combos:
-        pmids = fetch_pmids(search_term, apply_age_filter=APPLY_AGE_FILTER)
-        results[search_term] = {"components": components, "pmids": pmids}
-        print(f"✓ Found {len(pmids)} PMIDs")
+        # Fetch using the UID slicing method
+        pmids, translation, total_count = fetch_pmids_by_slicing(search_term, apply_age_filter=APPLY_AGE_FILTER)
+        
+        results[search_term] = {
+            "components": components, 
+            "pmids": pmids, 
+            "translation": translation,
+            "total_count": total_count
+        }
+        
+        print(f"   ✓ Finished. Retrieved {len(pmids)} PMIDs (Total expected: {total_count})")
         time.sleep(SLEEP_BETWEEN_CALLS)
 
     # 3. Save Outputs
-    print("💾 Saving term counts...")
+    print("💾 Saving term counts (with Search Details)...")
     save_term_counts(results, f"{OUTPUT_PREFIX}_counts.csv")
 
     if len(results) > 1:
